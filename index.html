@@ -10,7 +10,6 @@
         .header { border-bottom: 2px solid #eee; padding-bottom: 10px; margin-bottom: 20px; }
         .input-section textarea { width: 100%; height: 100px; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; margin-bottom: 10px; }
         
-        /* Slider Styles */
         .slider-container { margin: 15px 0; padding: 15px; background: #fff8e1; border-left: 4px solid #ffc107; border-radius: 4px; }
         input[type=range] { width: 100%; cursor: pointer; }
         .slider-help { font-size: 12px; color: #555; margin-top: 5px; }
@@ -32,7 +31,7 @@
     <div class="dashboard-container">
         <div class="header">
             <h2>Local Content Review Console</h2>
-            <p>Multilingual Zero-Shot Machine Learning with Dynamic Thresholds.</p>
+            <p>Multilingual Zero-Shot Machine Learning with Smart Safe Override.</p>
         </div>
 
         <div id="loadingBar">⚙️ Downloading Multilingual AI Engine... This model is larger, please be patient.</div>
@@ -42,8 +41,8 @@
             <textarea id="userInput" placeholder="Paste Tagalog, Chinese, or English comments here..."></textarea>
             
             <div class="slider-container">
-                <label for="thresholdSlider"><strong>AI Sensitivity Threshold: <span id="sliderValueDisplay">45</span>%</strong></label><br>
-                <input type="range" id="thresholdSlider" min="10" max="90" step="1" value="45">
+                <label for="thresholdSlider"><strong>AI Sensitivity Threshold: <span id="sliderValueDisplay">30</span>%</strong></label><br>
+                <input type="range" id="thresholdSlider" min="10" max="90" step="1" value="30">
                 <div class="slider-help">
                     <strong>Lower %</strong> = Stricter (Catches mild slang, but may flag innocent words).<br>
                     <strong>Higher %</strong> = Lenient (Only catches extreme, obvious violations).
@@ -107,17 +106,25 @@
                 let rawScores = {};
                 let topViolation = "None detected";
 
+                // Map the JSON output into a readable object
                 for (let i = 0; i < output.labels.length; i++) {
                     rawScores[output.labels[i]] = output.scores[i];
                 }
 
                 const currentThreshold = parseInt(slider.value) / 100;
+                const safeScore = rawScores['safe'];
 
-                if (rawScores['profanity'] > currentThreshold || rawScores['toxic'] > currentThreshold) {
+                // THE SMART SAFE OVERRIDE LOGIC
+                // A category must score higher than the slider threshold AND higher than the 'safe' score
+                const isProfanityTriggered = rawScores['profanity'] > currentThreshold && rawScores['profanity'] > safeScore;
+                const isToxicTriggered = rawScores['toxic'] > currentThreshold && rawScores['toxic'] > safeScore;
+
+                if (isProfanityTriggered || isToxicTriggered) {
                     isFlagged = true;
                     topViolation = rawScores['profanity'] > rawScores['toxic'] ? "PROFANITY" : "TOXICITY";
                 }
 
+                // Update Dashboard UI
                 document.getElementById('statusText').innerText = "AI Analysis Results";
                 document.getElementById('resultsContent').style.display = 'block';
                 
