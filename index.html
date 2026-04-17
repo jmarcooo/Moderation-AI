@@ -3,65 +3,20 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Moderation Dashboard Mockup</title>
+    <title>AI Moderation Dashboard</title>
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            background-color: #f4f7f6;
-            margin: 0;
-            padding: 20px;
-        }
-        .dashboard-container {
-            max-width: 800px;
-            margin: 0 auto;
-            background: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        }
-        .header {
-            border-bottom: 2px solid #eee;
-            padding-bottom: 10px;
-            margin-bottom: 20px;
-        }
-        .input-section textarea {
-            width: 100%;
-            height: 100px;
-            padding: 10px;
-            border: 1px solid #ccc;
-            border-radius: 4px;
-            box-sizing: border-box;
-            margin-bottom: 10px;
-        }
-        button {
-            background-color: #0056b3;
-            color: white;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 16px;
-        }
-        button:hover {
-            background-color: #004494;
-        }
-        .results-section {
-            margin-top: 20px;
-            padding: 15px;
-            background-color: #eef2f5;
-            border-radius: 4px;
-            display: none; /* Hidden until submission */
-        }
-        .status-badge {
-            display: inline-block;
-            padding: 5px 10px;
-            border-radius: 15px;
-            color: white;
-            font-weight: bold;
-            font-size: 14px;
-        }
+        /* Keeping the same styling as before */
+        body { font-family: Arial, sans-serif; background-color: #f4f7f6; margin: 0; padding: 20px; }
+        .dashboard-container { max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .header { border-bottom: 2px solid #eee; padding-bottom: 10px; margin-bottom: 20px; }
+        .input-section textarea { width: 100%; height: 100px; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; margin-bottom: 10px; }
+        button { background-color: #0056b3; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-size: 16px; }
+        button:hover { background-color: #004494; }
+        .results-section { margin-top: 20px; padding: 15px; background-color: #eef2f5; border-radius: 4px; display: none; }
+        .status-badge { display: inline-block; padding: 5px 10px; border-radius: 15px; color: white; font-weight: bold; font-size: 14px; }
         .safe { background-color: #28a745; }
         .flagged { background-color: #dc3545; }
+        .loading { color: #666; font-style: italic; }
     </style>
 </head>
 <body>
@@ -69,59 +24,93 @@
     <div class="dashboard-container">
         <div class="header">
             <h2>Content Review Console</h2>
-            <p>Test the AI text moderation pipeline.</p>
+            <p>Live text moderation pipeline.</p>
         </div>
 
         <div class="input-section">
             <label for="userInput"><strong>Submit Content for Analysis:</strong></label><br><br>
-            <textarea id="userInput" placeholder="Type a sample comment here... (e.g., 'This is a great post!' or 'You are an idiot!')"></textarea>
-            <button onclick="simulateAIAnalysis()">Run AI Analysis</button>
+            <textarea id="userInput" placeholder="Paste user comments, chat logs, or profile bios here..."></textarea>
+            <button onclick="runRealAIAnalysis()">Run AI Analysis</button>
         </div>
 
         <div class="results-section" id="resultsSection">
-            <h3>AI Analysis Results</h3>
-            <p><strong>Original Text:</strong> <span id="displayOriginal"></span></p>
-            <p><strong>Toxicity Score:</strong> <span id="displayScore"></span>%</p>
-            <p><strong>System Action:</strong> <span id="displayAction" class="status-badge"></span></p>
+            <h3 id="statusText">Processing...</h3>
+            <div id="resultsContent" style="display: none;">
+                <p><strong>System Action:</strong> <span id="displayAction" class="status-badge"></span></p>
+                <p><strong>Primary Violation:</strong> <span id="displayCategory">N/A</span></p>
+                <p><strong>Raw JSON Log:</strong></p>
+                <pre id="displayJson" style="background: #333; color: #fff; padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 12px;"></pre>
+            </div>
         </div>
     </div>
 
     <script>
-        function simulateAIAnalysis() {
+        async function runRealAIAnalysis() {
             const text = document.getElementById('userInput').value;
             if (!text) {
                 alert("Please enter some text to analyze.");
                 return;
             }
 
-            // Show the results section
+            // ⚠️ CRITICAL SECURITY WARNING ⚠️
+            // Do NOT commit this API key to a public GitHub repository.
+            // For a production Community Moderation Tool, this key must live on your backend.
+            const API_KEY = 'sk-YOUR_OPENAI_API_KEY_HERE'; 
+            const ENDPOINT = 'https://api.openai.com/v1/moderations';
+
+            // UI Updates: Show loading state
             document.getElementById('resultsSection').style.display = 'block';
-            document.getElementById('displayOriginal').innerText = text;
+            document.getElementById('statusText').innerText = "Analyzing content against safety policies...";
+            document.getElementById('resultsContent').style.display = 'none';
 
-            // --- SIMULATING THE AI API CALL ---
-            // In a real application, you would use fetch() here to send 'text' 
-            // to your backend, which then queries the Google Perspective API or OpenAI.
-            
-            // For this mockup, we generate a random "Toxicity Score" based on simple keyword detection
-            let mockToxicityScore = Math.floor(Math.random() * 20); // Base low score
-            
-            const toxicKeywords = ['idiot', 'stupid', 'hate', 'dumb', 'kill'];
-            const containsToxicWord = toxicKeywords.some(word => text.toLowerCase().includes(word));
+            try {
+                const response = await fetch(ENDPOINT, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${API_KEY}`
+                    },
+                    body: JSON.stringify({ input: text })
+                });
 
-            if (containsToxicWord) {
-                mockToxicityScore = Math.floor(Math.random() * 20) + 80; // High score (80-99%)
-            }
+                if (!response.ok) {
+                    throw new Error(`API Request Failed: ${response.status}`);
+                }
 
-            document.getElementById('displayScore').innerText = mockToxicityScore;
+                const data = await response.json();
+                const result = data.results[0];
+                
+                // UI Updates: Populate Data
+                document.getElementById('statusText').innerText = "AI Analysis Results";
+                document.getElementById('resultsContent').style.display = 'block';
+                
+                const actionBadge = document.getElementById('displayAction');
+                const categoryDisplay = document.getElementById('displayCategory');
 
-            // Logic to determine action based on the AI's score
-            const actionBadge = document.getElementById('displayAction');
-            if (mockToxicityScore > 75) {
-                actionBadge.innerText = "FLAGGED FOR HUMAN REVIEW";
-                actionBadge.className = "status-badge flagged";
-            } else {
-                actionBadge.innerText = "AUTO-APPROVED";
-                actionBadge.className = "status-badge safe";
+                // Check the boolean flag returned by the AI
+                if (result.flagged) {
+                    actionBadge.innerText = "FLAGGED FOR HUMAN REVIEW";
+                    actionBadge.className = "status-badge flagged";
+                    
+                    // Find the specific category that triggered the flag
+                    let violatedCategories = [];
+                    for (const [category, isFlagged] of Object.entries(result.categories)) {
+                        if (isFlagged) violatedCategories.push(category.replace('-', ' ').toUpperCase());
+                    }
+                    categoryDisplay.innerText = violatedCategories.join(', ');
+
+                } else {
+                    actionBadge.innerText = "AUTO-APPROVED";
+                    actionBadge.className = "status-badge safe";
+                    categoryDisplay.innerText = "None detected";
+                }
+
+                // Output the raw JSON so you can see the exact confidence scores for database logging
+                document.getElementById('displayJson').innerText = JSON.stringify(result.category_scores, null, 2);
+
+            } catch (error) {
+                console.error("Error during API call:", error);
+                document.getElementById('statusText').innerText = "Error: Could not complete analysis. Check console.";
             }
         }
     </script>
