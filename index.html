@@ -95,7 +95,7 @@
                 }
 
                 // Threshold Logic: If the model is more than 60% sure it belongs in the 'toxic' bucket
-                if (rawScores['toxic'] > 0.6) {
+                if (rawScores['toxic'] > 0.5) {
                     isFlagged = true;
                 }
 
