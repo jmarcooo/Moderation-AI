@@ -1,17 +1,1 @@
-```
-# Environment
-.env
-.env.local
-.env.*
-
-# Logs and temp files
-*.log
-*.tmp
-
-# Editors
-.vscode/
-.idea/
-
-# Dependencies
-node_modules/
-```
+Nothing needs to be added to .gitignore since the changes only include source/config files (README.md, index.html) without any build artifacts, dependencies, or temporary files.
