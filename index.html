@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Moderation Dashboard</title>
     <style>
-        /* Keeping the same styling as before */
         body { font-family: Arial, sans-serif; background-color: #f4f7f6; margin: 0; padding: 20px; }
         .dashboard-container { max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
         .header { border-bottom: 2px solid #eee; padding-bottom: 10px; margin-bottom: 20px; }
@@ -16,7 +15,7 @@
         .status-badge { display: inline-block; padding: 5px 10px; border-radius: 15px; color: white; font-weight: bold; font-size: 14px; }
         .safe { background-color: #28a745; }
         .flagged { background-color: #dc3545; }
-        .loading { color: #666; font-style: italic; }
+        .error-text { color: #dc3545; font-weight: bold; }
     </style>
 </head>
 <body>
@@ -24,13 +23,13 @@
     <div class="dashboard-container">
         <div class="header">
             <h2>Content Review Console</h2>
-            <p>Live text moderation pipeline.</p>
+            <p>Live text moderation pipeline (Secure Backend Routing).</p>
         </div>
 
         <div class="input-section">
             <label for="userInput"><strong>Submit Content for Analysis:</strong></label><br><br>
             <textarea id="userInput" placeholder="Paste user comments, chat logs, or profile bios here..."></textarea>
-            <button onclick="runRealAIAnalysis()">Run AI Analysis</button>
+            <button onclick="runSecureAIAnalysis()">Run AI Analysis</button>
         </div>
 
         <div class="results-section" id="resultsSection">
@@ -45,21 +44,20 @@
     </div>
 
     <script>
-        async function runRealAIAnalysis() {
+        async function runSecureAIAnalysis() {
             const text = document.getElementById('userInput').value;
             if (!text) {
                 alert("Please enter some text to analyze.");
                 return;
             }
 
-            // ⚠️ CRITICAL SECURITY WARNING ⚠️
-            // Do NOT commit this API key to a public GitHub repository.
-            // For a production Community Moderation Tool, this key must live on your backend.
-            const API_KEY = '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'; 
-            const ENDPOINT = 'https://api.openai.com/v1/moderations';
+            // Notice: No API key is stored here anymore.
+            // We are pointing the fetch request to your local Node.js server.
+            const ENDPOINT = 'http://localhost:3000/api/moderate';
 
             // UI Updates: Show loading state
             document.getElementById('resultsSection').style.display = 'block';
+            document.getElementById('statusText').className = '';
             document.getElementById('statusText').innerText = "Analyzing content against safety policies...";
             document.getElementById('resultsContent').style.display = 'none';
 
@@ -67,18 +65,19 @@
                 const response = await fetch(ENDPOINT, {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${API_KEY}`
+                        'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({ input: text })
                 });
 
                 if (!response.ok) {
-                    throw new Error(`API Request Failed: ${response.status}`);
+                    throw new Error(`Server Request Failed: ${response.status}`);
                 }
 
                 const data = await response.json();
-                const result = data.results[0];
+                
+                // The backend passes the exact OpenAI structure back to us
+                const result = data.results[0]; 
                 
                 // UI Updates: Populate Data
                 document.getElementById('statusText').innerText = "AI Analysis Results";
@@ -105,12 +104,13 @@
                     categoryDisplay.innerText = "None detected";
                 }
 
-                // Output the raw JSON so you can see the exact confidence scores for database logging
+                // Output the raw JSON so you can see the exact confidence scores
                 document.getElementById('displayJson').innerText = JSON.stringify(result.category_scores, null, 2);
 
             } catch (error) {
-                console.error("Error during API call:", error);
-                document.getElementById('statusText').innerText = "Error: Could not complete analysis. Check console.";
+                console.error("Error during server call:", error);
+                document.getElementById('statusText').innerText = "Error: Make sure your server.js backend is running!";
+                document.getElementById('statusText').className = 'error-text';
             }
         }
     </script>
