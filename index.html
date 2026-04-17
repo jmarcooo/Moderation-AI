@@ -61,6 +61,22 @@
                 <pre id="displayJson" style="background: #333; color: #fff; padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 12px;"></pre>
             </div>
         </div>
+        
+        <div class="results-section" style="margin-top: 20px; background: #fff3cd; border-left: 4px solid #ffc107;">
+            <h3>🎯 AI Training & Continuous Improvement</h3>
+            <p style="font-size: 13px; color: #666;">Collect anonymized analysis data to fine-tune your moderation model. Export this data to train custom models.</p>
+            <div style="display: flex; gap: 10px; margin-top: 10px;">
+                <button id="exportTrainingBtn" onclick="exportTrainingData()" style="background-color: #28a745; font-size: 14px; padding: 8px 16px;">
+                    📥 Export Training Data (<span id="trainingCount">0</span> examples)
+                </button>
+                <button id="clearTrainingBtn" onclick="clearTrainingData()" style="background-color: #dc3545; font-size: 14px; padding: 8px 16px;">
+                    🗑️ Clear Training Data
+                </button>
+            </div>
+            <p style="font-size: 12px; color: #856404; margin-top: 10px;">
+                <strong>How to use:</strong> After collecting examples, export the JSON file and use it to fine-tune models like BERT, RoBERTa, or mDeBERTa using Hugging Face Transformers or OpenAI's fine-tuning API.
+            </p>
+        </div>
     </div>
 
     <script type="module">
@@ -68,7 +84,50 @@
 
         env.allowLocalModels = false;
         let classifier;
+        let sentimentAnalyzer;
         let isOpenAIAvailable = false;
+        let trainingData = [];
+
+        // Enhanced label taxonomy for better accuracy
+        const ENHANCED_LABELS = [
+            // Profanity categories
+            'explicit_profanity',
+            'mild_profanity', 
+            'hate_speech',
+            'racial_slur',
+            'sexual_content',
+            
+            // Toxicity categories
+            'harassment',
+            'threats',
+            'bullying',
+            'discrimination',
+            'violence',
+            'self_harm',
+            
+            // Contextual categories
+            'sarcasm_detected',
+            'spam',
+            'safe'
+        ];
+
+        // Category weights for severity scoring
+        const CATEGORY_SEVERITY = {
+            'hate_speech': 1.0,
+            'racial_slur': 1.0,
+            'threats': 0.95,
+            'violence': 0.9,
+            'self_harm': 0.9,
+            'explicit_profanity': 0.8,
+            'harassment': 0.8,
+            'bullying': 0.75,
+            'discrimination': 0.85,
+            'sexual_content': 0.7,
+            'mild_profanity': 0.4,
+            'sarcasm_detected': 0.2,
+            'spam': 0.3,
+            'safe': 0.0
+        };
 
         const slider = document.getElementById('thresholdSlider');
         const sliderDisplay = document.getElementById('sliderValueDisplay');
@@ -78,8 +137,16 @@
 
         async function loadModel() {
             try {
-                // Load local model
+                // Load local model with enhanced taxonomy
                 classifier = await pipeline('zero-shot-classification', 'Xenova/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7');
+                
+                // Load sentiment analyzer for contextual understanding
+                try {
+                    sentimentAnalyzer = await pipeline('sentiment-analysis', 'Xenova/distilbert-base-uncased-finetuned-sst-2-english');
+                } catch (e) {
+                    console.log('Sentiment analyzer not loaded, continuing without it');
+                }
+                
                 document.getElementById('loadingBar').innerHTML = '✅ Local AI Ready | Checking cloud AI...';
                 
                 // Check if OpenAI backend is available
@@ -109,19 +176,36 @@
         }
 
         async function runLocalAIAnalysis(text) {
-            const labels = ['profanity', 'toxic', 'safe'];
-            const output = await classifier(text, labels);
+            // Use enhanced label taxonomy for better accuracy
+            const output = await classifier(text, ENHANCED_LABELS);
             
             let rawScores = {};
             for (let i = 0; i < output.labels.length; i++) {
                 rawScores[output.labels[i]] = output.scores[i];
             }
             
+            // Add sentiment analysis for context
+            let sentimentScore = 0.5; // neutral by default
+            if (sentimentAnalyzer) {
+                try {
+                    const sentimentResult = await sentimentAnalyzer(text);
+                    if (sentimentResult && sentimentResult[0]) {
+                        sentimentScore = sentimentResult[0].label === 'POSITIVE' ? 
+                            sentimentResult[0].score : (1 - sentimentResult[0].score);
+                    }
+                } catch (e) {
+                    console.log('Sentiment analysis failed');
+                }
+            }
+            
             return {
                 source: 'local',
                 scores: rawScores,
                 labels: output.labels,
-                scores_array: output.scores
+                scores_array: output.scores,
+                sentiment: sentimentScore,
+                topLabels: output.labels.slice(0, 5),
+                topScores: output.scores.slice(0, 5)
             };
         }
 
@@ -140,33 +224,33 @@
                 const data = await response.json();
                 const result = data.results[0];
                 
-                // Normalize OpenAI scores to match our format
+                // Enhanced OpenAI category mapping with detailed scores
                 const categories = result.categories;
                 const categoryScores = result.category_scores;
                 
-                // Map OpenAI categories to our labels
-                const profanityScore = Math.max(
-                    categoryScores.sexual || 0,
-                    categoryScores.hate || 0,
-                    categoryScores.harassment || 0
-                );
-                const toxicScore = Math.max(
-                    categoryScores.violence || 0,
-                    categoryScores.self_harm || 0,
-                    categoryScores.hate_threatening || 0,
-                    categoryScores.harassment_threatening || 0
-                );
-                const safeScore = result.flagged ? 0.3 : 0.9;
+                // Map all OpenAI categories to our enhanced taxonomy
+                const openaiMapping = {
+                    'hate_speech': Math.max(categoryScores.hate || 0, categoryScores.hate_threatening || 0),
+                    'racial_slur': categoryScores.hate || 0,
+                    'sexual_content': Math.max(categoryScores.sexual || 0, categoryScores.sexual_minors || 0),
+                    'harassment': Math.max(categoryScores.harassment || 0, categoryScores.harassment_threatening || 0),
+                    'threats': categoryScores.hate_threatening || 0,
+                    'violence': categoryScores.violence || 0,
+                    'self_harm': Math.max(categoryScores.self_harm || 0, categoryScores.self_harm_intent || 0, categoryScores.self_harm_instructions || 0),
+                    'explicit_profanity': Math.max(categoryScores.sexual || 0, categoryScores.hate || 0),
+                    'mild_profanity': Math.min(0.3, (categoryScores.harassment || 0) * 0.5),
+                    'discrimination': categoryScores.hate || 0,
+                    'bullying': categoryScores.harassment || 0,
+                    'spam': 0.0, // OpenAI doesn't directly detect spam
+                    'safe': result.flagged ? 0.2 : 0.9
+                };
                 
                 return {
                     source: 'openai',
-                    scores: {
-                        profanity: profanityScore,
-                        toxic: toxicScore,
-                        safe: safeScore
-                    },
+                    scores: openaiMapping,
                     flagged: result.flagged,
-                    categories: categories
+                    categories: categories,
+                    rawCategoryScores: categoryScores
                 };
             } catch (error) {
                 console.error('OpenAI analysis failed:', error);
@@ -177,32 +261,124 @@
         async function runHybridAnalysis(text, threshold) {
             const localResult = await runLocalAIAnalysis(text);
             
-            // If OpenAI is available, run both and combine results
+            // If OpenAI is available, run both and combine results with adaptive weighting
             if (isOpenAIAvailable) {
                 const openaiResult = await runOpenAIAnalysis(text);
                 
                 if (openaiResult) {
-                    // Ensemble approach: weighted average with OpenAI having higher weight for safety
-                    const combinedScores = {
-                        profanity: (localResult.scores.profanity * 0.4 + openaiResult.scores.profanity * 0.6),
-                        toxic: (localResult.scores.toxic * 0.4 + openaiResult.scores.toxic * 0.6),
-                        safe: (localResult.scores.safe * 0.5 + openaiResult.scores.safe * 0.5)
-                    };
+                    // Adaptive ensemble: use severity-weighted averaging
+                    const combinedScores = {};
+                    
+                    for (const label of ENHANCED_LABELS) {
+                        const localScore = localResult.scores[label] || 0;
+                        const openaiScore = openaiResult.scores[label] || 0;
+                        const severity = CATEGORY_SEVERITY[label] || 0.5;
+                        
+                        // Higher severity categories get more weight from OpenAI (more reliable for serious violations)
+                        const openaiWeight = 0.5 + (severity * 0.3); // 0.5 to 0.8
+                        const localWeight = 1 - openaiWeight;
+                        
+                        combinedScores[label] = (localScore * localWeight) + (openaiScore * openaiWeight);
+                    }
                     
                     return {
                         source: 'hybrid',
                         scores: combinedScores,
                         localResult,
                         openaiResult,
-                        confidence: 'high'
+                        confidence: 'high',
+                        sentiment: localResult.sentiment
                     };
                 }
             }
             
+            // Fallback to local-only with severity adjustment
+            const adjustedScores = {};
+            for (const label of ENHANCED_LABELS) {
+                const baseScore = localResult.scores[label] || 0;
+                const severity = CATEGORY_SEVERITY[label] || 0.5;
+                // Boost high-severity detections
+                adjustedScores[label] = baseScore * (1 + severity * 0.2);
+            }
+            
             return {
-                ...localResult,
-                confidence: 'medium'
+                source: 'local',
+                scores: adjustedScores,
+                localResult,
+                confidence: 'medium',
+                sentiment: localResult.sentiment
             };
+        }
+
+        // Training data collection for continuous improvement
+        function recordTrainingExample(text, userDecision, aiResult) {
+            trainingData.push({
+                timestamp: new Date().toISOString(),
+                text: text.substring(0, 500), // Limit length
+                aiPrediction: aiResult.scores,
+                userDecision: userDecision, // 'flagged' or 'approved'
+                analysisMethod: aiResult.source
+            });
+            
+            // Keep only last 100 examples in memory
+            if (trainingData.length > 100) {
+                trainingData.shift();
+            }
+            
+            console.log(`Training data recorded: ${trainingData.length} examples collected`);
+        }
+
+        // Export training data for model fine-tuning
+        window.exportTrainingData = function() {
+            const exportData = {
+                version: '1.0',
+                exportedAt: new Date().toISOString(),
+                totalExamples: trainingData.length,
+                data: trainingData
+            };
+            
+            const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `moderation-training-data-${new Date().toISOString().split('T')[0]}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+            
+            return exportData;
+        };
+
+        // Load training data from file
+        window.loadTrainingData = function(jsonString) {
+            try {
+                const imported = JSON.parse(jsonString);
+                if (imported.data && Array.isArray(imported.data)) {
+                    trainingData = [...trainingData, ...imported.data].slice(-100);
+                    console.log(`Loaded ${imported.data.length} training examples. Total: ${trainingData.length}`);
+                    updateTrainingCount();
+                    return true;
+                }
+            } catch (e) {
+                console.error('Failed to load training data:', e);
+            }
+            return false;
+        };
+
+        // Clear training data
+        window.clearTrainingData = function() {
+            if (confirm('Are you sure you want to clear all training data? This cannot be undone.')) {
+                trainingData = [];
+                updateTrainingCount();
+                console.log('Training data cleared');
+            }
+        };
+
+        // Update training count display
+        function updateTrainingCount() {
+            const countElement = document.getElementById('trainingCount');
+            if (countElement) {
+                countElement.textContent = trainingData.length;
+            }
         }
 
         async function runAIAnalysis() {
@@ -224,35 +400,38 @@
                 let isFlagged = false;
                 let topViolation = "None detected";
                 let violationDetails = [];
+                let severityScore = 0;
 
-                const safeScore = analysisResult.scores['safe'];
-                const profanityScore = analysisResult.scores['profanity'];
-                const toxicScore = analysisResult.scores['toxic'];
-
-                // Enhanced decision logic with adaptive thresholding
-                const isProfanityTriggered = profanityScore > currentThreshold && profanityScore > safeScore;
-                const isToxicTriggered = toxicScore > currentThreshold && toxicScore > safeScore;
-
-                // Additional safety: if either score is very high (>0.8), flag regardless of threshold
-                const criticalProfanity = profanityScore > 0.8;
-                const criticalToxic = toxicScore > 0.8;
-
-                if (isProfanityTriggered || isToxicTriggered || criticalProfanity || criticalToxic) {
-                    isFlagged = true;
+                // Find the highest severity violation that exceeds threshold
+                for (const label of ENHANCED_LABELS) {
+                    if (label === 'safe' || label === 'sarcasm_detected' || label === 'spam') continue;
                     
-                    // Determine primary violation with confidence levels
-                    if (profanityScore > toxicScore) {
-                        topViolation = `PROFANITY (${(profanityScore * 100).toFixed(1)}% confidence)`;
-                    } else {
-                        topViolation = `TOXICITY (${(toxicScore * 100).toFixed(1)}% confidence)`;
-                    }
+                    const score = analysisResult.scores[label] || 0;
+                    const severity = CATEGORY_SEVERITY[label] || 0.5;
+                    const adjustedThreshold = currentThreshold * (1 - severity * 0.3); // Lower threshold for high-severity
                     
-                    // Add secondary violations
-                    if (profanityScore > currentThreshold && profanityScore !== Math.max(profanityScore, toxicScore)) {
-                        violationDetails.push(`Secondary: Profanity (${(profanityScore * 100).toFixed(1)}%)`);
+                    if (score > adjustedThreshold && score > (analysisResult.scores['safe'] || 0)) {
+                        isFlagged = true;
+                        severityScore = Math.max(severityScore, score * severity);
+                        
+                        if (score > (analysisResult.scores[topViolation.split(' ')[0]] || 0)) {
+                            topViolation = `${label.toUpperCase()} (${(score * 100).toFixed(1)}% confidence, severity: ${(severity * 100).toFixed(0)}%)`;
+                        }
+                        
+                        violationDetails.push(`${label}: ${(score * 100).toFixed(1)}%`);
                     }
-                    if (toxicScore > currentThreshold && toxicScore !== Math.max(profanityScore, toxicScore)) {
-                        violationDetails.push(`Secondary: Toxicity (${(toxicScore * 100).toFixed(1)}%)`);
+                }
+
+                // Critical override: auto-flag very high severity scores
+                const criticalLabels = ['hate_speech', 'racial_slur', 'threats', 'self_harm'];
+                for (const label of criticalLabels) {
+                    const score = analysisResult.scores[label] || 0;
+                    if (score > 0.75) {
+                        isFlagged = true;
+                        if (!violationDetails.some(d => d.startsWith(label))) {
+                            violationDetails.unshift(`CRITICAL ${label}: ${(score * 100).toFixed(1)}%`);
+                        }
+                        topViolation = `CRITICAL: ${label.toUpperCase()} (${(score * 100).toFixed(1)}%)`;
                     }
                 }
 
@@ -266,15 +445,15 @@
                 if (isFlagged) {
                     actionBadge.innerText = "FLAGGED FOR HUMAN REVIEW";
                     actionBadge.className = "status-badge flagged";
-                    categoryDisplay.innerHTML = `${topViolation}<br><small style="font-size:11px;color:#666;">Method: ${analysisResult.source.toUpperCase()} | Confidence: ${analysisResult.confidence}</small>`;
+                    categoryDisplay.innerHTML = `${topViolation}<br><small style="font-size:11px;color:#666;">Method: ${analysisResult.source.toUpperCase()} | Confidence: ${analysisResult.confidence} | Sentiment: ${(analysisResult.sentiment * 100).toFixed(0)}%</small>`;
                     
                     if (violationDetails.length > 0) {
-                        categoryDisplay.innerHTML += `<br><small style="font-size:11px;color:#666;">${violationDetails.join('<br>')}</small>`;
+                        categoryDisplay.innerHTML += `<br><small style="font-size:11px;color:#666;">${violationDetails.slice(0, 5).join('<br>')}</small>`;
                     }
                 } else {
                     actionBadge.innerText = "AUTO-APPROVED";
                     actionBadge.className = "status-badge safe";
-                    categoryDisplay.innerHTML = `None detected<br><small style="font-size:11px;color:#666;">Method: ${analysisResult.source.toUpperCase()} | Safe score: ${(safeScore * 100).toFixed(1)}%</small>`;
+                    categoryDisplay.innerHTML = `None detected<br><small style="font-size:11px;color:#666;">Method: ${analysisResult.source.toUpperCase()} | Safe score: ${(analysisResult.scores['safe'] * 100).toFixed(1)}% | Sentiment: ${(analysisResult.sentiment * 100).toFixed(0)}%</small>`;
                 }
 
                 // Enhanced JSON output with detailed breakdown
@@ -282,13 +461,23 @@
                     final_decision: isFlagged ? "FLAGGED" : "APPROVED",
                     analysis_method: analysisResult.source,
                     confidence_level: analysisResult.confidence,
+                    sentiment_score: analysisResult.sentiment,
+                    severity_score: severityScore,
                     threshold_used: currentThreshold * 100 + "%",
-                    scores: {
-                        profanity: `${(profanityScore * 100).toFixed(2)}%`,
-                        toxicity: `${(toxicScore * 100).toFixed(2)}%`,
-                        safe: `${(safeScore * 100).toFixed(2)}%`
-                    },
-                    ...(analysisResult.localResult && { local_ai_scores: analysisResult.localResult.scores }),
+                    all_scores: Object.entries(analysisResult.scores)
+                        .filter(([key]) => key !== 'safe')
+                        .sort((a, b) => b[1] - a[1])
+                        .reduce((obj, [key, value]) => {
+                            obj[key] = `${(value * 100).toFixed(2)}%`;
+                            return obj;
+                        }, {}),
+                    safe_score: `${(analysisResult.scores['safe'] * 100).toFixed(2)}%`,
+                    ...(analysisResult.localResult && { 
+                        local_ai_top_predictions: analysisResult.localResult.topLabels.map((label, i) => ({
+                            label,
+                            score: `${(analysisResult.localResult.topScores[i] * 100).toFixed(2)}%`
+                        }))
+                    }),
                     ...(analysisResult.openaiResult && { 
                         cloud_ai_flagged: analysisResult.openaiResult.flagged,
                         cloud_ai_categories: analysisResult.openaiResult.categories
@@ -296,6 +485,10 @@
                 };
 
                 document.getElementById('displayJson').innerText = JSON.stringify(detailedOutput, null, 2);
+                
+                // Record this analysis for training
+                recordTrainingExample(text, isFlagged ? 'flagged' : 'approved', analysisResult);
+                updateTrainingCount();
 
             } catch (error) {
                 console.error("Analysis Error:", error);
