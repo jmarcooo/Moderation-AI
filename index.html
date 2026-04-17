@@ -68,6 +68,7 @@
 
         env.allowLocalModels = false;
         let classifier;
+        let isOpenAIAvailable = false;
 
         const slider = document.getElementById('thresholdSlider');
         const sliderDisplay = document.getElementById('sliderValueDisplay');
@@ -77,8 +78,28 @@
 
         async function loadModel() {
             try {
+                // Load local model
                 classifier = await pipeline('zero-shot-classification', 'Xenova/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7');
-                document.getElementById('loadingBar').style.display = 'none';
+                document.getElementById('loadingBar').innerHTML = '✅ Local AI Ready | Checking cloud AI...';
+                
+                // Check if OpenAI backend is available
+                try {
+                    const testResponse = await fetch('/api/moderate', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ input: 'test' })
+                    });
+                    if (testResponse.ok) {
+                        isOpenAIAvailable = true;
+                        document.getElementById('loadingBar').innerHTML = '✅ Hybrid AI System Ready (Local + Cloud)';
+                        document.getElementById('loadingBar').style.background = '#d1fae5';
+                        document.getElementById('loadingBar').style.color = '#065f46';
+                    }
+                } catch (e) {
+                    console.log('OpenAI backend not available, using local model only');
+                    document.getElementById('loadingBar').innerHTML = '⚠️ Local AI Only (Cloud AI unavailable)';
+                }
+                
                 document.getElementById('analyzeBtn').disabled = false;
                 document.getElementById('analyzeBtn').innerText = "Run AI Analysis";
             } catch (error) {
@@ -87,7 +108,104 @@
             }
         }
 
-        async function runLocalAIAnalysis() {
+        async function runLocalAIAnalysis(text) {
+            const labels = ['profanity', 'toxic', 'safe'];
+            const output = await classifier(text, labels);
+            
+            let rawScores = {};
+            for (let i = 0; i < output.labels.length; i++) {
+                rawScores[output.labels[i]] = output.scores[i];
+            }
+            
+            return {
+                source: 'local',
+                scores: rawScores,
+                labels: output.labels,
+                scores_array: output.scores
+            };
+        }
+
+        async function runOpenAIAnalysis(text) {
+            try {
+                const response = await fetch('/api/moderate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ input: text })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`OpenAI API Error: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                const result = data.results[0];
+                
+                // Normalize OpenAI scores to match our format
+                const categories = result.categories;
+                const categoryScores = result.category_scores;
+                
+                // Map OpenAI categories to our labels
+                const profanityScore = Math.max(
+                    categoryScores.sexual || 0,
+                    categoryScores.hate || 0,
+                    categoryScores.harassment || 0
+                );
+                const toxicScore = Math.max(
+                    categoryScores.violence || 0,
+                    categoryScores.self_harm || 0,
+                    categoryScores.hate_threatening || 0,
+                    categoryScores.harassment_threatening || 0
+                );
+                const safeScore = result.flagged ? 0.3 : 0.9;
+                
+                return {
+                    source: 'openai',
+                    scores: {
+                        profanity: profanityScore,
+                        toxic: toxicScore,
+                        safe: safeScore
+                    },
+                    flagged: result.flagged,
+                    categories: categories
+                };
+            } catch (error) {
+                console.error('OpenAI analysis failed:', error);
+                return null;
+            }
+        }
+
+        async function runHybridAnalysis(text, threshold) {
+            const localResult = await runLocalAIAnalysis(text);
+            
+            // If OpenAI is available, run both and combine results
+            if (isOpenAIAvailable) {
+                const openaiResult = await runOpenAIAnalysis(text);
+                
+                if (openaiResult) {
+                    // Ensemble approach: weighted average with OpenAI having higher weight for safety
+                    const combinedScores = {
+                        profanity: (localResult.scores.profanity * 0.4 + openaiResult.scores.profanity * 0.6),
+                        toxic: (localResult.scores.toxic * 0.4 + openaiResult.scores.toxic * 0.6),
+                        safe: (localResult.scores.safe * 0.5 + openaiResult.scores.safe * 0.5)
+                    };
+                    
+                    return {
+                        source: 'hybrid',
+                        scores: combinedScores,
+                        localResult,
+                        openaiResult,
+                        confidence: 'high'
+                    };
+                }
+            }
+            
+            return {
+                ...localResult,
+                confidence: 'medium'
+            };
+        }
+
+        async function runAIAnalysis() {
             const text = document.getElementById('userInput').value;
             if (!text) {
                 alert("Please enter some text to analyze.");
@@ -96,32 +214,46 @@
 
             document.getElementById('resultsSection').style.display = 'block';
             document.getElementById('resultsContent').style.display = 'none';
-            document.getElementById('statusText').innerText = "Analyzing locally...";
+            document.getElementById('statusText').innerText = "Analyzing with " + (isOpenAIAvailable ? "Hybrid AI (Local + Cloud)..." : "Local AI...");
+            document.getElementById('analyzeBtn').disabled = true;
 
             try {
-                const labels = ['profanity', 'toxic', 'safe'];
-                const output = await classifier(text, labels);
+                const currentThreshold = parseInt(slider.value) / 100;
+                const analysisResult = await runHybridAnalysis(text, currentThreshold);
                 
                 let isFlagged = false;
-                let rawScores = {};
                 let topViolation = "None detected";
+                let violationDetails = [];
 
-                // Map the JSON output into a readable object
-                for (let i = 0; i < output.labels.length; i++) {
-                    rawScores[output.labels[i]] = output.scores[i];
-                }
+                const safeScore = analysisResult.scores['safe'];
+                const profanityScore = analysisResult.scores['profanity'];
+                const toxicScore = analysisResult.scores['toxic'];
 
-                const currentThreshold = parseInt(slider.value) / 100;
-                const safeScore = rawScores['safe'];
+                // Enhanced decision logic with adaptive thresholding
+                const isProfanityTriggered = profanityScore > currentThreshold && profanityScore > safeScore;
+                const isToxicTriggered = toxicScore > currentThreshold && toxicScore > safeScore;
 
-                // THE SMART SAFE OVERRIDE LOGIC
-                // A category must score higher than the slider threshold AND higher than the 'safe' score
-                const isProfanityTriggered = rawScores['profanity'] > currentThreshold && rawScores['profanity'] > safeScore;
-                const isToxicTriggered = rawScores['toxic'] > currentThreshold && rawScores['toxic'] > safeScore;
+                // Additional safety: if either score is very high (>0.8), flag regardless of threshold
+                const criticalProfanity = profanityScore > 0.8;
+                const criticalToxic = toxicScore > 0.8;
 
-                if (isProfanityTriggered || isToxicTriggered) {
+                if (isProfanityTriggered || isToxicTriggered || criticalProfanity || criticalToxic) {
                     isFlagged = true;
-                    topViolation = rawScores['profanity'] > rawScores['toxic'] ? "PROFANITY" : "TOXICITY";
+                    
+                    // Determine primary violation with confidence levels
+                    if (profanityScore > toxicScore) {
+                        topViolation = `PROFANITY (${(profanityScore * 100).toFixed(1)}% confidence)`;
+                    } else {
+                        topViolation = `TOXICITY (${(toxicScore * 100).toFixed(1)}% confidence)`;
+                    }
+                    
+                    // Add secondary violations
+                    if (profanityScore > currentThreshold && profanityScore !== Math.max(profanityScore, toxicScore)) {
+                        violationDetails.push(`Secondary: Profanity (${(profanityScore * 100).toFixed(1)}%)`);
+                    }
+                    if (toxicScore > currentThreshold && toxicScore !== Math.max(profanityScore, toxicScore)) {
+                        violationDetails.push(`Secondary: Toxicity (${(toxicScore * 100).toFixed(1)}%)`);
+                    }
                 }
 
                 // Update Dashboard UI
@@ -134,22 +266,50 @@
                 if (isFlagged) {
                     actionBadge.innerText = "FLAGGED FOR HUMAN REVIEW";
                     actionBadge.className = "status-badge flagged";
-                    categoryDisplay.innerText = topViolation;
+                    categoryDisplay.innerHTML = `${topViolation}<br><small style="font-size:11px;color:#666;">Method: ${analysisResult.source.toUpperCase()} | Confidence: ${analysisResult.confidence}</small>`;
+                    
+                    if (violationDetails.length > 0) {
+                        categoryDisplay.innerHTML += `<br><small style="font-size:11px;color:#666;">${violationDetails.join('<br>')}</small>`;
+                    }
                 } else {
                     actionBadge.innerText = "AUTO-APPROVED";
                     actionBadge.className = "status-badge safe";
-                    categoryDisplay.innerText = "None detected";
+                    categoryDisplay.innerHTML = `None detected<br><small style="font-size:11px;color:#666;">Method: ${analysisResult.source.toUpperCase()} | Safe score: ${(safeScore * 100).toFixed(1)}%</small>`;
                 }
 
-                document.getElementById('displayJson').innerText = JSON.stringify(rawScores, null, 2);
+                // Enhanced JSON output with detailed breakdown
+                const detailedOutput = {
+                    final_decision: isFlagged ? "FLAGGED" : "APPROVED",
+                    analysis_method: analysisResult.source,
+                    confidence_level: analysisResult.confidence,
+                    threshold_used: currentThreshold * 100 + "%",
+                    scores: {
+                        profanity: `${(profanityScore * 100).toFixed(2)}%`,
+                        toxicity: `${(toxicScore * 100).toFixed(2)}%`,
+                        safe: `${(safeScore * 100).toFixed(2)}%`
+                    },
+                    ...(analysisResult.localResult && { local_ai_scores: analysisResult.localResult.scores }),
+                    ...(analysisResult.openaiResult && { 
+                        cloud_ai_flagged: analysisResult.openaiResult.flagged,
+                        cloud_ai_categories: analysisResult.openaiResult.categories
+                    })
+                };
+
+                document.getElementById('displayJson').innerText = JSON.stringify(detailedOutput, null, 2);
 
             } catch (error) {
                 console.error("Analysis Error:", error);
                 document.getElementById('statusText').innerText = "Error analyzing text.";
+                document.getElementById('resultsContent').style.display = 'block';
+                document.getElementById('displayAction').innerText = "ERROR";
+                document.getElementById('displayAction').className = "status-badge flagged";
+                document.getElementById('displayCategory').innerText = "Analysis failed - see console";
+            } finally {
+                document.getElementById('analyzeBtn').disabled = false;
             }
         }
 
-        document.getElementById('analyzeBtn').addEventListener('click', runLocalAIAnalysis);
+        document.getElementById('analyzeBtn').addEventListener('click', runAIAnalysis);
         loadModel();
     </script>
 
