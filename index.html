@@ -3,38 +3,44 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Moderation Dashboard</title>
+    <title>In-Browser AI Moderation</title>
     <style>
         body { font-family: Arial, sans-serif; background-color: #f4f7f6; margin: 0; padding: 20px; }
         .dashboard-container { max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
         .header { border-bottom: 2px solid #eee; padding-bottom: 10px; margin-bottom: 20px; }
         .input-section textarea { width: 100%; height: 100px; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; margin-bottom: 10px; }
-        button { background-color: #0056b3; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-size: 16px; }
+        
+        button { background-color: #0056b3; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-size: 16px; transition: 0.2s; }
         button:hover { background-color: #004494; }
-        .results-section { margin-top: 20px; padding: 15px; background-color: #eef2f5; border-radius: 4px; display: none; }
+        button:disabled { background-color: #cccccc; cursor: not-allowed; }
+        
+        .results-section { margin-top: 20px; padding: 15px; background-color: #eef2f5; border-radius: 4px; }
         .status-badge { display: inline-block; padding: 5px 10px; border-radius: 15px; color: white; font-weight: bold; font-size: 14px; }
         .safe { background-color: #28a745; }
         .flagged { background-color: #dc3545; }
-        .error-text { color: #dc3545; font-weight: bold; }
+        
+        #loadingBar { color: #d97706; font-weight: bold; padding: 10px; background: #fef3c7; border-radius: 4px; margin-bottom: 15px; }
     </style>
 </head>
 <body>
 
     <div class="dashboard-container">
         <div class="header">
-            <h2>Content Review Console</h2>
-            <p>Live text moderation pipeline (Secure Backend Routing).</p>
+            <h2>Local Content Review Console</h2>
+            <p>100% Free, Client-Side Machine Learning (No API Keys required).</p>
         </div>
+
+        <div id="loadingBar">⚙️ Downloading AI Engine to your browser cache... Please wait.</div>
 
         <div class="input-section">
             <label for="userInput"><strong>Submit Content for Analysis:</strong></label><br><br>
-            <textarea id="userInput" placeholder="Paste user comments, chat logs, or profile bios here..."></textarea>
-            <button onclick="runSecureAIAnalysis()">Run AI Analysis</button>
+            <textarea id="userInput" placeholder="Paste user comments here..."></textarea>
+            <button id="analyzeBtn" disabled>Run AI Analysis</button> 
         </div>
 
-        <div class="results-section" id="resultsSection">
-            <h3 id="statusText">Processing...</h3>
-            <div id="resultsContent" style="display: none;">
+        <div class="results-section" id="resultsSection" style="display: none;">
+            <h3 id="statusText">Results</h3>
+            <div id="resultsContent">
                 <p><strong>System Action:</strong> <span id="displayAction" class="status-badge"></span></p>
                 <p><strong>Primary Violation:</strong> <span id="displayCategory">N/A</span></p>
                 <p><strong>Raw JSON Log:</strong></p>
@@ -43,76 +49,92 @@
         </div>
     </div>
 
-    <script>
-        async function runSecureAIAnalysis() {
+    <script type="module">
+        import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@xenova/transformers@2.8.0';
+
+        // Disable local file checks since we are running on GitHub pages
+        env.allowLocalModels = false;
+
+        let classifier;
+
+        // 1. Initialize the AI as soon as the page loads
+        async function loadModel() {
+            try {
+                // This pulls the 'toxic-bert' model directly from Hugging Face into the browser
+                classifier = await pipeline('text-classification', 'Xenova/toxic-bert');
+                
+                // Once loaded, update UI
+                document.getElementById('loadingBar').style.display = 'none';
+                document.getElementById('analyzeBtn').disabled = false;
+                document.getElementById('analyzeBtn').innerText = "Run AI Analysis";
+            } catch (error) {
+                console.error("Failed to load model:", error);
+                document.getElementById('loadingBar').innerText = "❌ Error loading AI. Check console.";
+            }
+        }
+
+        // 2. Run the analysis when the user clicks the button
+        async function runLocalAIAnalysis() {
             const text = document.getElementById('userInput').value;
             if (!text) {
                 alert("Please enter some text to analyze.");
                 return;
             }
 
-            // Notice: No API key is stored here anymore.
-            // We are pointing the fetch request to your local Node.js server.
-            const ENDPOINT = 'http://localhost:3000/api/moderate';
-
-            // UI Updates: Show loading state
             document.getElementById('resultsSection').style.display = 'block';
-            document.getElementById('statusText').className = '';
-            document.getElementById('statusText').innerText = "Analyzing content against safety policies...";
             document.getElementById('resultsContent').style.display = 'none';
+            document.getElementById('statusText').innerText = "Analyzing locally...";
 
             try {
-                const response = await fetch(ENDPOINT, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ input: text })
+                // Ask the local AI model to evaluate the text
+                // topk: null ensures it returns scores for all categories, not just the top 1
+                const output = await classifier(text, { topk: null });
+                
+                let isFlagged = false;
+                let violatedCategories = [];
+                let rawScores = {};
+
+                // Reformat the output for our dashboard
+                output.forEach(item => {
+                    rawScores[item.label] = item.score;
+                    // If the AI is over 60% confident it's toxic, flag it
+                    if (item.score > 0.6) {
+                        isFlagged = true;
+                        violatedCategories.push(item.label.toUpperCase());
+                    }
                 });
 
-                if (!response.ok) {
-                    throw new Error(`Server Request Failed: ${response.status}`);
-                }
-
-                const data = await response.json();
-                
-                // The backend passes the exact OpenAI structure back to us
-                const result = data.results[0]; 
-                
-                // UI Updates: Populate Data
+                // Update UI: Populate Data
                 document.getElementById('statusText').innerText = "AI Analysis Results";
                 document.getElementById('resultsContent').style.display = 'block';
                 
                 const actionBadge = document.getElementById('displayAction');
                 const categoryDisplay = document.getElementById('displayCategory');
 
-                // Check the boolean flag returned by the AI
-                if (result.flagged) {
+                if (isFlagged) {
                     actionBadge.innerText = "FLAGGED FOR HUMAN REVIEW";
                     actionBadge.className = "status-badge flagged";
-                    
-                    // Find the specific category that triggered the flag
-                    let violatedCategories = [];
-                    for (const [category, isFlagged] of Object.entries(result.categories)) {
-                        if (isFlagged) violatedCategories.push(category.replace('-', ' ').toUpperCase());
-                    }
                     categoryDisplay.innerText = violatedCategories.join(', ');
-
                 } else {
                     actionBadge.innerText = "AUTO-APPROVED";
                     actionBadge.className = "status-badge safe";
                     categoryDisplay.innerText = "None detected";
                 }
 
-                // Output the raw JSON so you can see the exact confidence scores
-                document.getElementById('displayJson').innerText = JSON.stringify(result.category_scores, null, 2);
+                // Output the raw JSON
+                document.getElementById('displayJson').innerText = JSON.stringify(rawScores, null, 2);
 
             } catch (error) {
-                console.error("Error during server call:", error);
-                document.getElementById('statusText').innerText = "Error: Make sure your server.js backend is running!";
-                document.getElementById('statusText').className = 'error-text';
+                console.error("Analysis Error:", error);
+                document.getElementById('statusText').innerText = "Error analyzing text.";
             }
         }
+
+        // Attach the click event to the button
+        document.getElementById('analyzeBtn').addEventListener('click', runLocalAIAnalysis);
+
+        // Start downloading the model immediately
+        loadModel();
     </script>
 
 </body>
