@@ -10,7 +10,7 @@
         .header { border-bottom: 2px solid #eee; padding-bottom: 10px; margin-bottom: 20px; }
         .input-section textarea { width: 100%; height: 100px; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; margin-bottom: 10px; }
         
-        /* New Slider Styles */
+        /* Slider Styles */
         .slider-container { margin: 15px 0; padding: 15px; background: #fff8e1; border-left: 4px solid #ffc107; border-radius: 4px; }
         input[type=range] { width: 100%; cursor: pointer; }
         .slider-help { font-size: 12px; color: #555; margin-top: 5px; }
@@ -70,7 +70,6 @@
         env.allowLocalModels = false;
         let classifier;
 
-        // Update the visual number when the slider is moved
         const slider = document.getElementById('thresholdSlider');
         const sliderDisplay = document.getElementById('sliderValueDisplay');
         slider.addEventListener('input', function() {
@@ -101,7 +100,6 @@
             document.getElementById('statusText').innerText = "Analyzing locally...";
 
             try {
-                // EXPANED LABELS: We added 'profanity' to help the AI categorize better
                 const labels = ['profanity', 'toxic', 'safe'];
                 const output = await classifier(text, labels);
                 
@@ -113,17 +111,13 @@
                     rawScores[output.labels[i]] = output.scores[i];
                 }
 
-                // DYNAMIC THRESHOLD: Grab the current percentage from the slider (e.g., 45 becomes 0.45)
                 const currentThreshold = parseInt(slider.value) / 100;
 
-                // Check if EITHER 'profanity' OR 'toxic' scores higher than the slider value
                 if (rawScores['profanity'] > currentThreshold || rawScores['toxic'] > currentThreshold) {
                     isFlagged = true;
-                    // Determine which violation scored higher to display on the dashboard
                     topViolation = rawScores['profanity'] > rawScores['toxic'] ? "PROFANITY" : "TOXICITY";
                 }
 
-                // Update UI
                 document.getElementById('statusText').innerText = "AI Analysis Results";
                 document.getElementById('resultsContent').style.display = 'block';
                 
