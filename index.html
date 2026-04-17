@@ -57,10 +57,9 @@
 
         let classifier;
 
-        // 1. Initialize the AI as soon as the page loads
         async function loadModel() {
             try {
-                // This pulls the 'toxic-bert' model directly from Hugging Face into the browser
+                // Pulls the 'toxic-bert' model directly from Hugging Face into the browser
                 classifier = await pipeline('text-classification', 'Xenova/toxic-bert');
                 
                 // Once loaded, update UI
@@ -73,7 +72,6 @@
             }
         }
 
-        // 2. Run the analysis when the user clicks the button
         async function runLocalAIAnalysis() {
             const text = document.getElementById('userInput').value;
             if (!text) {
@@ -86,25 +84,20 @@
             document.getElementById('statusText').innerText = "Analyzing locally...";
 
             try {
-                // Ask the local AI model to evaluate the text
-                // topk: null ensures it returns scores for all categories, not just the top 1
                 const output = await classifier(text, { topk: null });
                 
                 let isFlagged = false;
                 let violatedCategories = [];
                 let rawScores = {};
 
-                // Reformat the output for our dashboard
                 output.forEach(item => {
                     rawScores[item.label] = item.score;
-                    // If the AI is over 60% confident it's toxic, flag it
                     if (item.score > 0.6) {
                         isFlagged = true;
                         violatedCategories.push(item.label.toUpperCase());
                     }
                 });
 
-                // Update UI: Populate Data
                 document.getElementById('statusText').innerText = "AI Analysis Results";
                 document.getElementById('resultsContent').style.display = 'block';
                 
@@ -121,7 +114,6 @@
                     categoryDisplay.innerText = "None detected";
                 }
 
-                // Output the raw JSON
                 document.getElementById('displayJson').innerText = JSON.stringify(rawScores, null, 2);
 
             } catch (error) {
@@ -130,10 +122,7 @@
             }
         }
 
-        // Attach the click event to the button
         document.getElementById('analyzeBtn').addEventListener('click', runLocalAIAnalysis);
-
-        // Start downloading the model immediately
         loadModel();
     </script>
 
